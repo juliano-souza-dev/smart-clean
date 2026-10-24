@@ -5,7 +5,11 @@ plugins {
 
 android {
     namespace = "com.juliano.limpacel"
-    compileSdk = 37
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 0
+        }
+    }
 
     defaultConfig {
         applicationId = "com.juliano.limpacel"

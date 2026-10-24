@@ -31,7 +31,7 @@ jobs:
         run: |
           SDK_MANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
           test -n "$SDK_MANAGER"
-          "$SDK_MANAGER" --install "platforms;android-37" "build-tools;36.0.0"
+          "$SDK_MANAGER" --install "platforms;android-37.0" "build-tools;36.0.0"
 
       - name: Configurar Gradle 9.6.0
         uses: gradle/actions/setup-gradle@v4
