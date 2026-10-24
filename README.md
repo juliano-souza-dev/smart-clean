@@ -39,3 +39,14 @@ Antes de publicar na Play Store serão necessários: nome e identidade visual de
 - `app/build.gradle.kts`: dependências e opções Android.
 
 Nome e identificador de pacote são provisórios e poderão ser alterados antes da publicação.
+
+## Compilação automática no GitHub
+
+O arquivo `.github/workflows/android-apk.yml` executa a compilação ao enviar alterações para `main` e também permite execução manual.
+
+1. Abra a aba **Actions** do repositório.
+2. Selecione **Build Android APK** e a execução desejada.
+3. Quando a execução estiver verde, na seção **Artifacts** baixe `SmartClean-debug-APK`.
+4. Extraia o ZIP do artefato para obter o arquivo `app-debug.apk` e instale-o no dispositivo de teste.
+
+O APK debug é para testes. Para a publicação futura na Play Store será criado um pipeline de release com assinatura segura, sem armazenar chaves privadas no repositório.
