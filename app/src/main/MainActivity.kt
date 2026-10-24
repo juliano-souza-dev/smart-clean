@@ -3,20 +3,21 @@ package com.juliano.limpacel
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.storage.StorageManager
+import android.os.Environment
+import android.os.StatFs
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,152 +27,153 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val Background = Color(0xFF0D1725)
-private val Surface = Color(0xFF17273A)
-private val TextMuted = Color(0xFFAABCD0)
-private val Mint = Color(0xFF31D4AF)
+private val Ocean = Color(0xFF0C1624)
+private val Panel = Color(0xFF18283B)
+private val Pale = Color(0xFFA9BBD0)
+private val Green = Color(0xFF34DBB5)
+private val Warning = Color(0xFFFFCE84)
 
 class MainActivity : ComponentActivity() {
+    private var broadAccess by mutableStateOf(false)
+
+    override fun onResume() {
+        super.onResume()
+        broadAccess = Environment.isExternalStorageManager()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = android.graphics.Color.rgb(13, 23, 37)
-        window.navigationBarColor = android.graphics.Color.rgb(13, 23, 37)
+        window.statusBarColor = android.graphics.Color.rgb(12, 22, 36)
+        window.navigationBarColor = android.graphics.Color.rgb(12, 22, 36)
 
         setContent {
-            val scanner = remember { StorageScanner(applicationContext) }
+            val scanner = remember { MegaScanner(applicationContext) }
             val scope = rememberCoroutineScope()
-            var folder by remember {
-                mutableStateOf(getPreferences(MODE_PRIVATE).getString("tree_uri", null)?.let(Uri::parse))
-            }
-            var refreshKey by remember { mutableIntStateOf(0) }
-            var usage by remember { mutableStateOf(scanner.diskUsage()) }
-            var report by remember { mutableStateOf<ScanReport?>(null) }
+            var usage by remember { mutableStateOf(scanner.usage()) }
+            var report by remember { mutableStateOf<MegaReport?>(null) }
+            var progress by remember { mutableStateOf<MegaProgress?>(null) }
             var scanning by remember { mutableStateOf(false) }
             var deleting by remember { mutableStateOf(false) }
-            var errorMessage by remember { mutableStateOf<String?>(null) }
-            var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-            var showDeleteConfirmation by remember { mutableStateOf(false) }
-            var currentFilter by remember { mutableStateOf(FileFilter.LARGE) }
+            var error by remember { mutableStateOf<String?>(null) }
+            var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+            var filter by remember { mutableStateOf(ResultFilter.LARGE) }
+            var confirmDelete by remember { mutableStateOf(false) }
+            var scanJob by remember { mutableStateOf<Job?>(null) }
 
-            val folderPicker = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.OpenDocumentTree()
-            ) { uri ->
-                if (uri != null) {
-                    val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                    try {
-                        contentResolver.takePersistableUriPermission(uri, flags)
-                    } catch (_: SecurityException) {
-                        // Alguns provedores permitem somente leitura.
-                        try {
-                            contentResolver.takePersistableUriPermission(
-                                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            )
-                        } catch (_: SecurityException) {
-                            errorMessage = "Não foi possível manter acesso a essa pasta."
-                        }
-                    }
-                    getPreferences(MODE_PRIVATE).edit()
-                        .putString("tree_uri", uri.toString()).apply()
-                    folder = uri
+            fun startMegaScan() {
+                if (!broadAccess) return
+                scanJob?.cancel()
+                scanJob = scope.launch {
+                    scanning = true
+                    error = null
+                    selected = emptySet()
                     report = null
-                    selectedIds = emptySet()
-                    refreshKey++
+                    progress = MegaProgress("Preparando análise", 0, 0, "Armazenamento compartilhado")
+                    try {
+                        report = scanner.scan { updated ->
+                            withContext(Dispatchers.Main) { progress = updated }
+                        }
+                        usage = withContext(Dispatchers.IO) { scanner.usage() }
+                    } catch (_: CancellationException) {
+                        error = "Análise interrompida. Nenhum arquivo foi apagado."
+                    } catch (e: Exception) {
+                        error = e.message ?: "Não foi possível concluir o Mega Scan."
+                    } finally {
+                        scanning = false
+                        progress = null
+                    }
                 }
             }
 
-            LaunchedEffect(folder, refreshKey) {
-                if (folder != null) {
-                    scanning = true
-                    errorMessage = null
-                    selectedIds = emptySet()
-                    report = try {
-                        withContext(Dispatchers.IO) { scanner.scan(folder!!) }
-                    } catch (e: Exception) {
-                        errorMessage = e.message ?: "Falha ao analisar a pasta"
-                        null
-                    } finally {
-                        scanning = false
-                    }
-                }
-                usage = withContext(Dispatchers.IO) { scanner.diskUsage() }
+            LaunchedEffect(broadAccess) {
+                if (broadAccess && report == null && !scanning) startMegaScan()
             }
 
             MaterialTheme(
                 colorScheme = darkColorScheme(
-                    primary = Mint,
-                    onPrimary = Background,
-                    background = Background,
-                    surface = Surface,
-                    onSurface = Color.White
+                    primary = Green, onPrimary = Ocean, background = Ocean,
+                    surface = Panel, onSurface = Color.White
                 )
             ) {
-                CleanerScreen(
+                MegaScreen(
+                    accessGranted = broadAccess,
                     usage = usage,
-                    folder = folder,
                     report = report,
-                    scanning = scanning || deleting,
-                    errorMessage = errorMessage,
-                    selectedIds = selectedIds,
-                    filter = currentFilter,
-                    onChangeFilter = { currentFilter = it },
-                    onPickFolder = { folderPicker.launch(null) },
-                    onManageStorage = {
-                        try {
-                            startActivity(Intent(StorageManager.ACTION_MANAGE_STORAGE))
-                        } catch (_: Exception) {
-                            startActivity(Intent(Settings.ACTION_SETTINGS))
+                    progress = progress,
+                    busy = scanning || deleting,
+                    error = error,
+                    filter = filter,
+                    selected = selected,
+                    onFilter = { filter = it },
+                    onGrantAccess = {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        )
+                        try { startActivity(intent) } catch (_: Exception) {
+                            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
                         }
                     },
-                    onRescan = { refreshKey++ },
-                    onSelectionChange = { id, checked ->
-                        selectedIds = if (checked) selectedIds + id else selectedIds - id
+                    onRescan = { startMegaScan() },
+                    onStop = { scanJob?.cancel() },
+                    onCheck = { path, value ->
+                        selected = if (value) selected + path else selected - path
                     },
-                    onDelete = { showDeleteConfirmation = true }
+                    onSelectDuplicateExtras = {
+                        val extras = report?.duplicateGroups.orEmpty().flatMap { group ->
+                            group.sortedByDescending { it.modified }.drop(1)
+                        }.mapTo(hashSetOf()) { it.path }
+                        selected = selected + extras
+                    },
+                    onDelete = { confirmDelete = true }
                 )
 
-                val toRemove = report?.files?.filter { it.id in selectedIds }.orEmpty()
-                if (showDeleteConfirmation) {
+                if (confirmDelete) {
+                    val files = report?.files.orEmpty().filter { it.path in selected }
+                    val bytes = files.sumOf { it.bytes }
                     AlertDialog(
-                        onDismissRequest = { showDeleteConfirmation = false },
-                        title = { Text("Confirmar exclusão") },
+                        onDismissRequest = { confirmDelete = false },
+                        title = { Text("Excluir arquivos selecionados?") },
                         text = {
                             Text(
-                                "Você selecionou ${toRemove.size} arquivo(s), somando " +
-                                    "${formatBytes(toRemove.sumOf { it.sizeBytes })}. " +
-                                    "A remoção pode ser permanente e não poderá ser desfeita. " +
-                                    "Verifique se manteve uma cópia dos arquivos importantes."
+                                "${files.size} arquivo(s), totalizando ${readableSize(bytes)}. " +
+                                    "Esta exclusão pode ser permanente. Confira a lista e " +
+                                    "mantenha uma cópia de tudo o que for importante."
                             )
                         },
                         confirmButton = {
                             TextButton(onClick = {
-                                showDeleteConfirmation = false
-                                if (toRemove.isNotEmpty()) {
-                                    scope.launch {
-                                        deleting = true
+                                confirmDelete = false
+                                if (files.isNotEmpty()) scope.launch {
+                                    deleting = true
+                                    try {
                                         val result = withContext(Dispatchers.IO) {
-                                            scanner.deleteSelected(toRemove.map { it.uri })
+                                            scanner.delete(files.map { it.path })
                                         }
-                                        deleting = false
                                         Toast.makeText(
                                             this@MainActivity,
-                                            "Removidos: ${result.removed}; falhas: ${result.failed}",
+                                            "Excluídos: ${result.deleted} · Falhas: ${result.failed} · " +
+                                                "${readableSize(result.freedBytes)} liberados",
                                             Toast.LENGTH_LONG
                                         ).show()
-                                        selectedIds = emptySet()
-                                        refreshKey++
+                                        selected = emptySet()
+                                        startMegaScan()
+                                    } catch (e: Exception) {
+                                        error = e.message ?: "Falha ao excluir arquivos."
+                                    } finally {
+                                        deleting = false
                                     }
                                 }
-                            }) { Text("Excluir arquivos") }
+                            }) { Text("Excluir definitivamente") }
                         },
                         dismissButton = {
-                            TextButton(onClick = { showDeleteConfirmation = false }) {
-                                Text("Cancelar")
-                            }
+                            TextButton(onClick = { confirmDelete = false }) { Text("Cancelar") }
                         }
                     )
                 }
@@ -180,200 +182,231 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class FileFilter(val title: String) {
-    LARGE("Grandes"), DUPLICATES("Duplicados"), ALL("Todos")
+private enum class ResultFilter(val title: String) {
+    LARGE("Grandes"), DUPLICATES("Duplicados"), INSTALLERS("APKs"),
+    TEMPORARY("Temporários"), ALL("Todos")
 }
 
 @Composable
-private fun CleanerScreen(
-    usage: DiskUsage,
-    folder: Uri?,
-    report: ScanReport?,
-    scanning: Boolean,
-    errorMessage: String?,
-    selectedIds: Set<String>,
-    filter: FileFilter,
-    onChangeFilter: (FileFilter) -> Unit,
-    onPickFolder: () -> Unit,
-    onManageStorage: () -> Unit,
+private fun MegaScreen(
+    accessGranted: Boolean,
+    usage: DeviceUsage,
+    report: MegaReport?,
+    progress: MegaProgress?,
+    busy: Boolean,
+    error: String?,
+    filter: ResultFilter,
+    selected: Set<String>,
+    onFilter: (ResultFilter) -> Unit,
+    onGrantAccess: () -> Unit,
     onRescan: () -> Unit,
-    onSelectionChange: (String, Boolean) -> Unit,
+    onStop: () -> Unit,
+    onCheck: (String, Boolean) -> Unit,
+    onSelectDuplicateExtras: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val usageRatio = if (usage.totalBytes <= 0) 0f
-        else (usage.usedBytes.toFloat() / usage.totalBytes).coerceIn(0f, 1f)
+    val usedRatio = if (usage.total == 0L) 0f
+        else (usage.used.toFloat() / usage.total).coerceIn(0f, 1f)
     val candidates = when (filter) {
-        FileFilter.LARGE -> report?.largeFiles.orEmpty()
-        FileFilter.DUPLICATES -> report?.files?.filter { it.id in report.duplicateIds }.orEmpty()
-        FileFilter.ALL -> report?.files.orEmpty()
+        ResultFilter.LARGE -> report?.largeFiles.orEmpty()
+        ResultFilter.DUPLICATES -> report?.let { result ->
+            result.files.filter { it.path in result.duplicatePaths }
+        }.orEmpty()
+        ResultFilter.INSTALLERS -> report?.installers.orEmpty()
+        ResultFilter.TEMPORARY -> report?.temporaryCandidates.orEmpty()
+        ResultFilter.ALL -> report?.files.orEmpty()
     }
-    val visibleFiles = candidates.take(100)
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(Background).safeDrawingPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(17.dp)
-    ) {
-        Text("LIMPACEL", fontSize = 13.sp, color = Mint, fontWeight = FontWeight.Bold)
-        Text("Seu celular, mais leve.", fontSize = 25.sp, fontWeight = FontWeight.Bold)
-        Text("Encontre o que ocupa espaço e escolha o que remover.", color = TextMuted)
+    Column(Modifier.fillMaxSize().background(Ocean).safeDrawingPadding()) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 17.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("SMART CLEAN · MEGA SCAN", color = Green,
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Descubra o que ocupa espaço.", fontSize = 25.sp,
+                        fontWeight = FontWeight.Bold)
+                    Text("O aplicativo procura os arquivos por você.", color = Pale)
+                }
+            }
 
-        Card(colors = CardDefaults.cardColors(containerColor = Surface),
-            shape = RoundedCornerShape(24.dp)) {
-            Column(Modifier.fillMaxWidth().padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(
-                        progress = { usageRatio },
-                        strokeWidth = 8.dp,
-                        color = Mint,
-                        trackColor = Color(0xFF32465B),
-                        modifier = Modifier.size(100.dp)
-                    )
-                    Spacer(Modifier.width(18.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Text("ARMAZENAMENTO", color = TextMuted, fontSize = 11.sp)
-                        Text("${(usageRatio * 100).toInt()}% usado", fontSize = 24.sp,
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = Panel),
+                    shape = RoundedCornerShape(22.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                progress = { usedRatio },
+                                modifier = Modifier.size(94.dp), strokeWidth = 8.dp,
+                                color = Green, trackColor = Color(0xFF31475C)
+                            )
+                            Spacer(Modifier.width(18.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("ARMAZENAMENTO INTERNO", color = Pale, fontSize = 11.sp)
+                                Text("${(usedRatio * 100).toInt()}% em uso", fontSize = 23.sp,
+                                    fontWeight = FontWeight.Bold)
+                                Text("${readableSize(usage.free)} livres", color = Green)
+                            }
+                        }
+                        HorizontalDivider(color = Color(0xFF2E4157))
+                        Text("${readableSize(usage.used)} usados de ${readableSize(usage.total)}",
+                            color = Pale, fontSize = 12.sp)
+                    }
+                }
+            }
+
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = Panel),
+                    shape = RoundedCornerShape(22.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Mega Scan automático", fontSize = 19.sp,
+                            fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (!accessGranted)
+                                "Autorize o gerenciamento dos arquivos compartilhados uma vez. " +
+                                    "Não é necessário escolher nenhuma pasta."
+                            else if (busy)
+                                "Analisando o armazenamento. Nenhum arquivo será excluído automaticamente."
+                            else "Verifique todo o armazenamento compartilhado com um toque.",
+                            color = Pale, fontSize = 13.sp
+                        )
+                        if (!accessGranted) {
+                            Button(onClick = onGrantAccess, modifier = Modifier.fillMaxWidth()) {
+                                Text("Permitir acesso e iniciar")
+                            }
+                        } else if (busy) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text(progress?.stage ?: "Processando…", color = Green)
+                            Text(
+                                "${progress?.files ?: 0} arquivos · " +
+                                    "${readableSize(progress?.bytes ?: 0L)} identificados",
+                                color = Pale, fontSize = 12.sp
+                            )
+                            Text(progress?.location.orEmpty(), color = Pale, fontSize = 11.sp,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
+                                Text("Interromper análise")
+                            }
+                        } else {
+                            Button(onClick = onRescan, modifier = Modifier.fillMaxWidth()) {
+                                Text(if (report == null) "Iniciar Mega Scan" else "Fazer novo Mega Scan")
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (error != null) item {
+                Text(error, color = Warning, fontSize = 13.sp)
+            }
+
+            if (report != null) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Resultado do Mega Scan", fontSize = 20.sp,
                             fontWeight = FontWeight.Bold)
-                        Text("${formatBytes(usage.freeBytes)} livres", color = Mint)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Metric("Arquivos", "${report.files.size}", Modifier.weight(1f))
+                            Metric("Grandes", "${report.largeFiles.size}", Modifier.weight(1f))
+                            Metric("Duplicados", "${report.duplicateGroups.size}", Modifier.weight(1f))
+                        }
+                        Text(
+                            "${readableSize(report.indexedBytes)} encontrados em " +
+                                "${report.roots.size} unidade(s) de armazenamento compartilhado.",
+                            color = Pale, fontSize = 12.sp
+                        )
+                        if (report.incomplete || report.hashLimitReached || report.unreadableFolders > 0) {
+                            Text(
+                                "Algumas áreas são protegidas ou não puderam ser lidas. " +
+                                    "A comparação de duplicados também possui limite de processamento.",
+                                color = Warning, fontSize = 12.sp
+                            )
+                        }
                     }
                 }
-                HorizontalDivider(color = Color(0xFF33445A))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Em uso: ${formatBytes(usage.usedBytes)}", color = TextMuted,
-                        fontSize = 12.sp)
-                    Text("Total: ${formatBytes(usage.totalBytes)}", color = TextMuted,
-                        fontSize = 12.sp)
-                }
-                OutlinedButton(onClick = onManageStorage, modifier = Modifier.fillMaxWidth()) {
-                    Text("Configurações de armazenamento")
-                }
-            }
-        }
-
-        Card(colors = CardDefaults.cardColors(containerColor = Surface),
-            shape = RoundedCornerShape(24.dp)) {
-            Column(Modifier.fillMaxWidth().padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(11.dp)) {
-                Text("Analisar uma pasta", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
-                Text(
-                    if (folder == null) "Escolha uma pasta para localizar arquivos grandes e duplicados."
-                    else "Selecionada: ${folder.lastPathSegment?.substringAfterLast(':') ?: "pasta autorizada"}",
-                    color = TextMuted, fontSize = 13.sp
-                )
-                Button(onClick = onPickFolder, enabled = !scanning,
-                    modifier = Modifier.fillMaxWidth()) {
-                    Text(if (folder == null) "Escolher pasta" else "Trocar pasta")
-                }
-                if (folder != null) {
-                    TextButton(onClick = onRescan, enabled = !scanning,
-                        modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                        Text("Analisar novamente")
+                item {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        ResultFilter.entries.forEach { value ->
+                            FilterChip(selected = filter == value,
+                                onClick = { onFilter(value) },
+                                label = { Text(value.title) })
+                        }
                     }
                 }
-            }
-        }
-
-        if (scanning) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(modifier = Modifier.size(25.dp), strokeWidth = 3.dp)
-                Spacer(Modifier.width(12.dp))
-                Text("Processando arquivos com segurança…", color = TextMuted)
-            }
-        }
-        errorMessage?.let {
-            Text("Aviso: $it", color = Color(0xFFFFA59E))
-        }
-
-        if (report != null) {
-            Text("Resultado da análise", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                ResultMetric("Arquivos", "${report.files.size}", Modifier.weight(1f))
-                ResultMetric("Grandes", "${report.largeFiles.size}", Modifier.weight(1f))
-                ResultMetric("Grupos iguais", "${report.duplicateGroups.size}", Modifier.weight(1f))
-            }
-            Text(
-                "A pasta analisada contém ${formatBytes(report.knownBytes)} em arquivos identificados.",
-                color = TextMuted, fontSize = 13.sp
-            )
-            if (report.wasTruncated || report.hashingLimited || report.skippedEntries > 0) {
-                Text(
-                    "Análise parcial: ${report.skippedEntries} itens não puderam ser lidos; " +
-                        "a verificação possui limites de quantidade e tamanho.",
-                    color = Color(0xFFFFCC83), fontSize = 12.sp
-                )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FileFilter.entries.forEach { option ->
-                    FilterChip(
-                        selected = filter == option,
-                        onClick = { onChangeFilter(option) },
-                        label = { Text(option.title) }
-                    )
-                }
-            }
-            Text(
-                if (filter == FileFilter.DUPLICATES)
-                    "Arquivos com conteúdo idêntico. Confira quais cópias deseja manter."
-                else "Selecione apenas os arquivos que você reconhece e deseja remover.",
-                color = TextMuted, fontSize = 13.sp
-            )
-
-            if (candidates.isEmpty()) {
-                Text("Nenhum arquivo nesta categoria.", color = TextMuted)
-            }
-            visibleFiles.forEach { file ->
-                val checked = file.id in selectedIds
-                Row(
-                    Modifier.fillMaxWidth().border(
-                        1.dp, if (checked) Mint else Color(0xFF304359), RoundedCornerShape(14.dp)
-                    ).clickable(enabled = !scanning) { onSelectionChange(file.id, !checked) }
-                        .padding(horizontal = 10.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(checked = checked, enabled = !scanning,
-                        onCheckedChange = { onSelectionChange(file.id, it) })
-                    Spacer(Modifier.width(6.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(file.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(formatBytes(file.sizeBytes), color = TextMuted, fontSize = 12.sp)
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("${candidates.size} arquivo(s) nesta categoria",
+                            fontWeight = FontWeight.SemiBold)
+                        Text("Toque para selecionar. Confira o caminho completo antes de excluir.",
+                            color = Pale, fontSize = 12.sp)
+                        if (filter == ResultFilter.DUPLICATES && report.duplicateGroups.isNotEmpty()) {
+                            OutlinedButton(onClick = onSelectDuplicateExtras) {
+                                Text("Marcar cópias extras (mantendo uma de cada)")
+                            }
+                        }
+                        if (filter == ResultFilter.TEMPORARY) {
+                            Text("Arquivos classificados pelo nome; podem ser importantes. Revise-os.",
+                                color = Warning, fontSize = 12.sp)
+                        }
                     }
-                    if (file.id in report.duplicateIds) {
-                        Text("Igual", fontSize = 11.sp, color = Mint)
+                }
+                if (candidates.isEmpty()) item {
+                    Text("Nenhum resultado nesta categoria.", color = Pale)
+                }
+                items(candidates, key = { it.path }) { file ->
+                    val checked = file.path in selected
+                    Row(
+                        Modifier.fillMaxWidth().border(
+                            1.dp, if (checked) Green else Color(0xFF324359),
+                            RoundedCornerShape(14.dp)
+                        ).clickable(enabled = !busy) { onCheck(file.path, !checked) }
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(checked = checked, onCheckedChange = { onCheck(file.path, it) },
+                            enabled = !busy)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(file.name, fontWeight = FontWeight.Medium,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(file.folder, fontSize = 11.sp, color = Pale,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(readableSize(file.bytes), fontSize = 12.sp, color = Green)
+                        }
                     }
                 }
             }
-            if (candidates.size > 100) {
-                Text("Mostrando os 100 primeiros de ${candidates.size} arquivos.",
-                    color = TextMuted, fontSize = 12.sp)
-            }
-            if (selectedIds.isNotEmpty()) {
-                Button(
-                    onClick = onDelete,
-                    enabled = !scanning,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE77B73))
-                ) {
-                    Text("Excluir ${selectedIds.size} arquivo(s)", color = Background)
-                }
+
+            item {
+                Text("O Android mantém dados privados de outros aplicativos protegidos. " +
+                    "O Smart Clean não usa root nem apaga arquivos sem confirmação.",
+                    color = Pale, fontSize = 11.sp)
             }
         }
 
-        Text("Limpeza sob seu controle · Sem acesso irrestrito aos seus dados",
-            color = TextMuted, fontSize = 11.sp)
-        Spacer(Modifier.height(24.dp))
+        if (selected.isNotEmpty()) {
+            Button(
+                onClick = onDelete, enabled = !busy,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF28A82)),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 17.dp, vertical = 10.dp)
+            ) {
+                Text("Revisar exclusão de ${selected.size} arquivo(s)", color = Ocean)
+            }
+        }
     }
 }
 
 @Composable
-private fun ResultMetric(label: String, value: String, modifier: Modifier) {
-    Column(
-        modifier.background(Surface, RoundedCornerShape(16.dp)).padding(13.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp)
-    ) {
-        Text(value, fontWeight = FontWeight.Bold, fontSize = 22.sp)
-        Text(label, color = TextMuted, fontSize = 11.sp)
+private fun Metric(label: String, value: String, modifier: Modifier) {
+    Column(modifier.background(Panel, RoundedCornerShape(16.dp)).padding(13.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(value, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+        Text(label, fontSize = 11.sp, color = Pale)
     }
 }

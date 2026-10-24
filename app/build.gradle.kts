@@ -5,18 +5,14 @@ plugins {
 
 android {
     namespace = "com.juliano.limpacel"
-    compileSdk {
-        version = release(37) {
-            minorApiLevel = 0
-        }
-    }
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.juliano.limpacel"
-        minSdk = 29
+        minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildTypes {
@@ -48,7 +44,6 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.12.3")
-    implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

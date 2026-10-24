@@ -1,52 +1,43 @@
-# LimpaCel — Android nativo
+# Smart Clean — Android nativo
 
 Aplicativo de limpeza segura para Android, desenvolvido com Kotlin e Jetpack Compose.
 
-## Primeira entrega
+## Mega Scan v0.2
 
 - Painel real de espaço total, usado e disponível no armazenamento interno.
-- Escolha de uma pasta pelo seletor seguro do Android (Storage Access Framework).
-- Varredura de arquivos da pasta e suas subpastas (até 10.000 arquivos).
-- Identificação de arquivos grandes (100 MiB ou mais).
-- Localização de duplicados por tamanho e hash SHA-256 de conteúdo (arquivos de até 512 MiB por item).
+- Uma única autorização especial para **gerenciar todos os arquivos compartilhados** — sem escolher pastas manualmente.
+- Varredura automática das unidades compartilhadas, incluindo Downloads, DCIM, Documents e Android/media (até 150.000 arquivos).
+- Identificação de arquivos grandes (50 MiB ou mais), APKs e candidatos a temporários.
+- Busca de duplicados por tamanho e SHA-256 (até 2 GiB por arquivo e 16 GiB de comparação por análise).
+- Progresso da análise com contador de arquivos, tamanho e etapa atual; opção de interromper.
+- Exibição da localização completa dos arquivos encontrados.
 - Seleção individual e confirmação explícita para exclusão.
-- Acesso às configurações de armazenamento nativas do Android.
+- Ação de marcar cópias extras preservando uma cópia de cada grupo, sem excluir automaticamente.
 - Tudo local, sem conexão de rede, publicidade ou telemetria.
 
-**Importante:** a análise de arquivos restringe-se à pasta que o usuário autoriza; não representa uma varredura completa do celular. O Android não autoriza apps comuns a acessar indiscriminadamente os dados privados dos outros apps. Não há promessa de acelerar RAM, CPU ou limpar cache privado de outros apps.
+**Importante:** o acesso amplo ainda não inclui dados privados de outros apps, como `/Android/data` e `/Android/obb`. Não prometemos acelerar RAM, CPU ou limpar cache privado de outros aplicativos. O resultado pode ser parcial se pastas forem protegidas ou limites de processamento forem atingidos.
 
 ## Como abrir
 
 1. Instale o Android Studio compatível com Android Gradle Plugin 9.4.0 e SDK 37.
 2. Abra esta pasta como projeto Gradle.
 3. Permita que o Android Studio sincronize as dependências. O projeto define Gradle 9.6.0 no `gradle/wrapper/gradle-wrapper.properties` (o *wrapper executável* não foi incluído).
-4. Execute em aparelho ou emulador Android 10+ (API 29+).
+4. Execute em aparelho ou emulador Android 11+ (API 30+).
 5. Para gerar o APK de teste: **Build > Build App Bundle(s) / APK(s) > Build APK(s)**.
 
-O APK ainda precisa ser compilado em uma instalação com Android SDK. Esta entrega contém o código-fonte, não um APK já compilado ou testado em dispositivo.
+O GitHub Actions compila o APK de teste automaticamente a cada push para `main`. Abra a aba **Actions**, selecione a execução **Build Android APK** e baixe o artefato **SmartClean-debug-APK** após o sucesso.
 
 ## Permissões e segurança
 
-O manifesto não declara `MANAGE_EXTERNAL_STORAGE`, `QUERY_ALL_PACKAGES` nem permissões amplas de mídia. O seletor do Android concede acesso somente à pasta escolhida. A exclusão não ocorre durante a análise e cada arquivo deve ser marcado pelo usuário.
+O manifesto declara `MANAGE_EXTERNAL_STORAGE`. A permissão **não é concedida automaticamente**: o usuário deve ativá-la explicitamente nas configurações do sistema. Ela é necessária para o Mega Scan que percorre arquivos compartilhados, sem a limitação do seletor de pastas. A exclusão não acontece durante o scan e exige marcação e confirmação de cada arquivo.
 
-Antes de publicar na Play Store serão necessários: nome e identidade visual definitivos, política de privacidade, testes em dispositivos reais, assinatura de release e revisão dos requisitos vigentes da loja.
+**Google Play:** essa permissão é restrita. Aplicativos cujo propósito central é gerenciamento/manutenção de arquivos podem solicitar avaliação, mas a Google Play exige declaração e aprovação, sem garantia de aceitação. Antes da publicação também são necessários política de privacidade, testes reais, assinatura de release e AAB.
 
 ## Estrutura
 
 - `app/src/main/MainActivity.kt`: tela principal e fluxo de seleção/remoção.
-- `app/src/main/StorageScanner.kt`: leitura segura de pastas, análise e SHA-256.
-- `app/src/main/AndroidManifest.xml`: configuração sem permissões de alto risco.
+- `app/src/main/MegaScanner.kt`: busca automática, análise e SHA-256.
+- `app/src/main/AndroidManifest.xml`: permissão especial explícita.
 - `app/build.gradle.kts`: dependências e opções Android.
 
-Nome e identificador de pacote são provisórios e poderão ser alterados antes da publicação.
-
-## Compilação automática no GitHub
-
-O arquivo `.github/workflows/android-apk.yml` executa a compilação ao enviar alterações para `main` e também permite execução manual.
-
-1. Abra a aba **Actions** do repositório.
-2. Selecione **Build Android APK** e a execução desejada.
-3. Quando a execução estiver verde, na seção **Artifacts** baixe `SmartClean-debug-APK`.
-4. Extraia o ZIP do artefato para obter o arquivo `app-debug.apk` e instale-o no dispositivo de teste.
-
-O APK debug é para testes. Para a publicação futura na Play Store será criado um pipeline de release com assinatura segura, sem armazenar chaves privadas no repositório.
+O identificador do pacote ainda é provisório e pode ser alterado antes da publicação.
