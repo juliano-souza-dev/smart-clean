@@ -38,6 +38,18 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
+      - name: Executar testes automatizados
+        run: gradle --no-daemon :app:testDebugUnitTest
+
+      - name: Publicar relatórios de teste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartClean-test-results
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Compilar APK Debug
         run: gradle --no-daemon :app:assembleDebug
 

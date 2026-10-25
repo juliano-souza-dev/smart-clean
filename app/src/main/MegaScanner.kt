@@ -86,6 +86,10 @@ data class MegaReport(
 
 data class MegaDeletion(val deleted: Int, val failed: Int, val freedBytes: Long)
 
+/** Confere o estado capturado pelo scan antes de qualquer exclusão. */
+fun snapshotMatches(file: File, snapshot: MegaFile): Boolean =
+    file.isFile && file.length() == snapshot.bytes && file.lastModified() == snapshot.modified
+
 /**
  * Varredura do armazenamento compartilhado. Exige autorização explícita
  * MANAGE_EXTERNAL_STORAGE do usuário (Android 11+).
@@ -215,8 +219,7 @@ class MegaScanner(private val context: Context) {
                 val isWithinSharedStorage = roots.any { root ->
                     file.path.startsWith("$root${File.separator}")
                 }
-                if (!isWithinSharedStorage || isProtectedDirectory(file) || !file.isFile ||
-                    file.length() != snapshot.bytes || file.lastModified() != snapshot.modified) false
+                if (!isWithinSharedStorage || isProtectedDirectory(file) || !snapshotMatches(file, snapshot)) false
                 else {
                     val size = file.length()
                     val didDelete = file.delete()
