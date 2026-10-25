@@ -24,10 +24,42 @@ data class MegaFile(
     val modified: Long
 ) {
     val folder: String get() = path.substringBeforeLast('/', "")
-    val isInstaller: Boolean get() = name.endsWith(".apk", ignoreCase = true)
+    val kind: FileKind get() = classifyFile(this)
+    val isInstaller: Boolean get() = kind == FileKind.APK
     val isTemporary: Boolean get() = listOf(
         ".tmp", ".temp", ".log", ".bak", ".old", ".part", ".crdownload"
     ).any { name.endsWith(it, ignoreCase = true) }
+}
+
+enum class FileKind(val title: String) {
+    PHOTO("Fotos"), SCREENSHOT("Capturas"), VIDEO("Vídeos"),
+    SCREEN_RECORDING("Gravações de tela"), MUSIC("Músicas"), AUDIO("Áudios"),
+    PDF("PDFs"), DOCUMENT("Documentos"), ARCHIVE("Compactados"),
+    APK("APKs"), OTHER("Outros")
+}
+
+private val imageExt = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp", "dng", "avif")
+private val videoExt = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v", "ts")
+private val audioExt = setOf("mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "wma", "amr", "mid")
+private val docExt = setOf("doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods", "epub", "csv", "json")
+private val archiveExt = setOf("zip", "rar", "7z", "tar", "gz", "bz2", "xz")
+
+fun classifyFile(file: MegaFile): FileKind {
+    val ext = file.name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    val path = file.path.lowercase(Locale.ROOT)
+    return when {
+        ext in imageExt && (path.contains("screenshot") || path.contains("screen_shot") || path.contains("captura")) -> FileKind.SCREENSHOT
+        ext in imageExt -> FileKind.PHOTO
+        ext in videoExt && (path.contains("screenrecord") || path.contains("screen_record") || path.contains("screen-record") || path.contains("gravacao de tela")) -> FileKind.SCREEN_RECORDING
+        ext in videoExt -> FileKind.VIDEO
+        ext in audioExt && (path.contains("/music/") || path.contains("/musicas/") || path.contains("/música/")) -> FileKind.MUSIC
+        ext in audioExt -> FileKind.AUDIO
+        ext == "pdf" -> FileKind.PDF
+        ext in docExt -> FileKind.DOCUMENT
+        ext in archiveExt -> FileKind.ARCHIVE
+        ext == "apk" -> FileKind.APK
+        else -> FileKind.OTHER
+    }
 }
 
 data class MegaProgress(
@@ -170,19 +202,21 @@ class MegaScanner(private val context: Context) {
         )
     }
 
-    fun delete(paths: List<String>): MegaDeletion {
+    fun delete(files: List<MegaFile>): MegaDeletion {
         check(Environment.isExternalStorageManager()) { "O acesso aos arquivos foi revogado." }
         val roots = sharedRoots().mapNotNull { runCatching { it.canonicalPath }.getOrNull() }
         var deleted = 0
         var failed = 0
         var freed = 0L
-        for (path in paths.distinct()) {
+        for (snapshot in files.distinctBy { it.path }) {
+            val path = snapshot.path
             val success = runCatching {
                 val file = File(path).canonicalFile
                 val isWithinSharedStorage = roots.any { root ->
                     file.path.startsWith("$root${File.separator}")
                 }
-                if (!isWithinSharedStorage || isProtectedDirectory(file) || !file.isFile) false
+                if (!isWithinSharedStorage || isProtectedDirectory(file) || !file.isFile ||
+                    file.length() != snapshot.bytes || file.lastModified() != snapshot.modified) false
                 else {
                     val size = file.length()
                     val didDelete = file.delete()

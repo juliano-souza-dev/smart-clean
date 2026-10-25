@@ -4,9 +4,16 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
-import android.os.StatFs
 import android.provider.Settings
 import android.widget.Toast
+import android.media.ThumbnailUtils
+import android.graphics.Bitmap
+import android.util.Size
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -64,6 +71,7 @@ class MainActivity : ComponentActivity() {
             var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
             var filter by remember { mutableStateOf(ResultFilter.LARGE) }
             var confirmDelete by remember { mutableStateOf(false) }
+            var extraConfirm by remember { mutableStateOf(false) }
             var scanJob by remember { mutableStateOf<Job?>(null) }
 
             fun startMegaScan() {
@@ -125,13 +133,15 @@ class MainActivity : ComponentActivity() {
                     onCheck = { path, value ->
                         selected = if (value) selected + path else selected - path
                     },
+                    onSelectVisible = { paths -> selected = selected + paths },
+                    onDeselectVisible = { paths -> selected = selected - paths },
                     onSelectDuplicateExtras = {
                         val extras = report?.duplicateGroups.orEmpty().flatMap { group ->
                             group.sortedByDescending { it.modified }.drop(1)
                         }.mapTo(hashSetOf()) { it.path }
                         selected = selected + extras
                     },
-                    onDelete = { confirmDelete = true }
+                    onDelete = { extraConfirm = false; confirmDelete = true }
                 )
 
                 if (confirmDelete) {
@@ -139,22 +149,27 @@ class MainActivity : ComponentActivity() {
                     val bytes = files.sumOf { it.bytes }
                     AlertDialog(
                         onDismissRequest = { confirmDelete = false },
-                        title = { Text("Excluir arquivos selecionados?") },
+                        title = { Text(if (extraConfirm) "Última confirmação" else "Excluir arquivos selecionados?") },
                         text = {
                             Text(
-                                "${files.size} arquivo(s), totalizando ${readableSize(bytes)}. " +
+                                if (extraConfirm) "Atenção: ${files.size} arquivos serão excluídos permanentemente. Esta ação não poderá ser desfeita."
+                                else "${files.size} arquivo(s), totalizando ${readableSize(bytes)}. " +
                                     "Esta exclusão pode ser permanente. Confira a lista e " +
                                     "mantenha uma cópia de tudo o que for importante."
                             )
                         },
                         confirmButton = {
                             TextButton(onClick = {
+                                if (!extraConfirm && (files.size >= 50 || bytes >= 1024L * 1024L * 1024L)) {
+                                    extraConfirm = true
+                                } else {
                                 confirmDelete = false
+                                extraConfirm = false
                                 if (files.isNotEmpty()) scope.launch {
                                     deleting = true
                                     try {
                                         val result = withContext(Dispatchers.IO) {
-                                            scanner.delete(files.map { it.path })
+                                            scanner.delete(files)
                                         }
                                         Toast.makeText(
                                             this@MainActivity,
@@ -170,7 +185,8 @@ class MainActivity : ComponentActivity() {
                                         deleting = false
                                     }
                                 }
-                            }) { Text("Excluir definitivamente") }
+                                }
+                            }) { Text(if (extraConfirm) "Confirmar exclusão permanente" else "Continuar") }
                         },
                         dismissButton = {
                             TextButton(onClick = { confirmDelete = false }) { Text("Cancelar") }
@@ -182,9 +198,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class ResultFilter(val title: String) {
-    LARGE("Grandes"), DUPLICATES("Duplicados"), INSTALLERS("APKs"),
-    TEMPORARY("Temporários"), ALL("Todos")
+private enum class ResultFilter(val title: String, val kind: FileKind? = null) {
+    LARGE("Grandes"), DUPLICATES("Duplicados"), TEMPORARY("Temporários"),
+    PHOTO("Fotos", FileKind.PHOTO), SCREENSHOT("Capturas", FileKind.SCREENSHOT),
+    VIDEO("Vídeos", FileKind.VIDEO), SCREEN_RECORDING("Gravações de tela", FileKind.SCREEN_RECORDING),
+    MUSIC("Músicas", FileKind.MUSIC), AUDIO("Áudios", FileKind.AUDIO),
+    PDF("PDFs", FileKind.PDF), DOCUMENT("Documentos", FileKind.DOCUMENT),
+    ARCHIVE("Compactados", FileKind.ARCHIVE), INSTALLERS("APKs", FileKind.APK),
+    OTHER("Outros", FileKind.OTHER), ALL("Todos")
 }
 
 @Composable
@@ -203,6 +224,8 @@ private fun MegaScreen(
     onStop: () -> Unit,
     onCheck: (String, Boolean) -> Unit,
     onSelectDuplicateExtras: () -> Unit,
+    onSelectVisible: (Set<String>) -> Unit,
+    onDeselectVisible: (Set<String>) -> Unit,
     onDelete: () -> Unit
 ) {
     val usedRatio = if (usage.total == 0L) 0f
@@ -215,7 +238,10 @@ private fun MegaScreen(
         ResultFilter.INSTALLERS -> report?.installers.orEmpty()
         ResultFilter.TEMPORARY -> report?.temporaryCandidates.orEmpty()
         ResultFilter.ALL -> report?.files.orEmpty()
+        else -> report?.files.orEmpty().filter { it.kind == filter.kind }
     }
+    val visiblePaths = remember(candidates) { candidates.mapTo(hashSetOf()) { it.path } }
+    val visibleBytes = candidates.sumOf { it.bytes }
 
     Column(Modifier.fillMaxSize().background(Ocean).safeDrawingPadding()) {
         LazyColumn(
@@ -335,16 +361,37 @@ private fun MegaScreen(
                         ResultFilter.entries.forEach { value ->
                             FilterChip(selected = filter == value,
                                 onClick = { onFilter(value) },
-                                label = { Text(value.title) })
+                                label = {
+                                    val count = when (value) {
+                                        ResultFilter.LARGE -> report.largeFiles.size
+                                        ResultFilter.DUPLICATES -> report.duplicatePaths.size
+                                        ResultFilter.TEMPORARY -> report.temporaryCandidates.size
+                                        ResultFilter.ALL -> report.files.size
+                                        else -> report.files.count { it.kind == value.kind }
+                                    }
+                                    Text("${value.title} ($count)")
+                                })
                         }
                     }
                 }
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("${candidates.size} arquivo(s) nesta categoria",
+                        Text("${candidates.size} arquivo(s) · ${readableSize(visibleBytes)} nesta categoria",
                             fontWeight = FontWeight.SemiBold)
                         Text("Toque para selecionar. Confira o caminho completo antes de excluir.",
                             color = Pale, fontSize = 12.sp)
+                        if (candidates.isNotEmpty()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { onSelectVisible(visiblePaths) }, enabled = !busy) {
+                                    Text("Selecionar todos")
+                                }
+                                OutlinedButton(onClick = { onDeselectVisible(visiblePaths) }, enabled = !busy) {
+                                    Text("Desmarcar")
+                                }
+                            }
+                            Text("${candidates.count { it.path in selected }} selecionado(s) nesta categoria",
+                                color = Green, fontSize = 12.sp)
+                        }
                         if (filter == ResultFilter.DUPLICATES && report.duplicateGroups.isNotEmpty()) {
                             OutlinedButton(onClick = onSelectDuplicateExtras) {
                                 Text("Marcar cópias extras (mantendo uma de cada)")
@@ -371,7 +418,9 @@ private fun MegaScreen(
                     ) {
                         Checkbox(checked = checked, onCheckedChange = { onCheck(file.path, it) },
                             enabled = !busy)
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
+                        FileThumbnail(file)
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(file.name, fontWeight = FontWeight.Medium,
                                 maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -408,5 +457,49 @@ private fun Metric(label: String, value: String, modifier: Modifier) {
         verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(value, fontSize = 21.sp, fontWeight = FontWeight.Bold)
         Text(label, fontSize = 11.sp, color = Pale)
+    }
+}
+
+
+@Composable
+private fun FileThumbnail(file: MegaFile) {
+    val kind = file.kind
+    val bitmap by produceState<Bitmap?>(initialValue = null, file.path, file.modified) {
+        value = if (kind in setOf(FileKind.PHOTO, FileKind.SCREENSHOT, FileKind.VIDEO, FileKind.SCREEN_RECORDING)) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val source = File(file.path)
+                    if (!source.isFile) null
+                    else if (kind == FileKind.PHOTO || kind == FileKind.SCREENSHOT)
+                        ThumbnailUtils.createImageThumbnail(source, Size(128, 128), null)
+                    else ThumbnailUtils.createVideoThumbnail(source, Size(128, 128), null)
+                }.getOrNull()
+            }
+        } else null
+    }
+    Box(
+        Modifier.size(56.dp).clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF293C51)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = "Prévia de ${file.name}",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Text(when (kind) {
+                FileKind.PHOTO, FileKind.SCREENSHOT -> "🖼"
+                FileKind.VIDEO, FileKind.SCREEN_RECORDING -> "▶"
+                FileKind.MUSIC, FileKind.AUDIO -> "♫"
+                FileKind.PDF -> "PDF"
+                FileKind.DOCUMENT -> "DOC"
+                FileKind.ARCHIVE -> "ZIP"
+                FileKind.APK -> "APK"
+                FileKind.OTHER -> "📄"
+            }, color = Pale, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
