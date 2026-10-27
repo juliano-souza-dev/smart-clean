@@ -1,43 +1,42 @@
 # Smart Clean — Android nativo
 
-Aplicativo de limpeza segura para Android, desenvolvido com Kotlin e Jetpack Compose.
+Aplicativo Kotlin/Jetpack Compose, compatível com Android 11 ou superior (`minSdk 30`, `targetSdk 36`). **100% local**, sem conta, anúncios, telemetria ou envio dos nomes/conteúdos dos arquivos a servidores.
 
-## Mega Scan v0.2
+## Recursos implementados
 
-- Painel real de espaço total, usado e disponível no armazenamento interno.
-- Uma única autorização especial para **gerenciar todos os arquivos compartilhados** — sem escolher pastas manualmente.
-- Varredura automática das unidades compartilhadas, incluindo Downloads, DCIM, Documents e Android/media (até 150.000 arquivos).
-- Identificação de arquivos grandes (50 MiB ou mais), APKs e candidatos a temporários.
-- Busca de duplicados por tamanho e SHA-256 (até 2 GiB por arquivo e 16 GiB de comparação por análise).
-- Progresso da análise com contador de arquivos, tamanho e etapa atual; opção de interromper.
-- Exibição da localização completa dos arquivos encontrados.
-- Seleção individual e confirmação explícita para exclusão.
-- Ação de marcar cópias extras preservando uma cópia de cada grupo, sem excluir automaticamente.
-- Tudo local, sem conexão de rede, publicidade ou telemetria.
+- **Início:** espaço real em uso e disponível, Mega Scan sob demanda, resultados e atalhos.
+- **Arquivos:** categorias de grandes (limite ajustável, padrão 100 MB), duplicados SHA-256, temporários, ocultos, miniaturas, mídias de apps, mídias possivelmente fora do índice do Android, fotos, vídeos, capturas, músicas, documentos, arquivos compactados e APKs baixados.
+- **Mega Scan inteligente:** varredura de armazenamento compartilhado permitido pelo Android, hash somente após agrupamento por tamanho, orçamento padrão de leitura de 16 GiB para comparações e opção de aprofundar; comparação interrompida se o estado térmico ficar elevado. Limite de 150 mil arquivos/30 mil pastas por varredura, com indicação de resultado parcial. Progresso, notificação persistente e cancelamento. A execução em segundo plano está sujeita às regras e aos limites do Android.
+- **Exclusão segura:** nenhum arquivo vem pré-marcado. Seleção individual, em lote ou só de cópias excedentes de grupos duplicados. Confirmação obrigatória; exclusão definitiva exige segunda confirmação. Pastas privadas do Android, lixeira e pastas indicadas como **Não tocar** são protegidas.
+- **Lixeira recuperável:** movimenta arquivos para área oculta no mesmo volume, sem sobrescrever o nome original na restauração; arquivos na lixeira **continuam ocupando espaço** até serem excluídos de vez. O usuário escolhe entre restaurar e excluir permanentemente.
+- **Saúde:** temperatura real da bateria, status térmico do Android, RAM total/disponível, tempo em primeiro plano dos aplicativos quando autorizado, ações assistidas nas Configurações e medições antes/depois. Não há botão falso de resfriar, liberar RAM nem comando oculto de encerrar outros aplicativos.
+- **Histórico local:** resultados por arquivo, inclusive falhas, tamanho, espaço livre, temperatura da bateria e RAM antes/depois da operação. Pode ser apagado pelo usuário.
 
-**Importante:** o acesso amplo ainda não inclui dados privados de outros apps, como `/Android/data` e `/Android/obb`. Não prometemos acelerar RAM, CPU ou limpar cache privado de outros aplicativos. O resultado pode ser parcial se pastas forem protegidas ou limites de processamento forem atingidos.
+## Limitações importantes
 
-## Como abrir
+- `MANAGE_EXTERNAL_STORAGE` não dá acesso a dados privados de outros apps em `Android/data`, `Android/obb` nem a cache privado. O Android impede que um app comum force o encerramento de outros apps. A lista de aplicativos mostra **uso recente em primeiro plano**, não consumo de CPU em tempo real.
+- A lista de APKs refere-se aos **arquivos instaladores `.apk` encontrados**; não é possível concluir com segurança apenas por seu nome que algum instalador está sem uso.
+- Mídias fora do índice do Android são **candidatas à revisão**, não prova de lixo. Identificação pode ser parcial em versões recentes do Android.
+- Acesso especial a arquivos precisa ser habilitado pelo usuário nas configurações. A Google Play exige **avaliação e aprovação específicas** para aplicativos que solicitam acesso amplo; instalar um APK por fora não concede a permissão automaticamente.
+- As medições antes/depois não estabelecem causalidade. Temperatura lida é **da bateria**, não da CPU, e o Android gerencia a RAM sozinho.
 
-1. Instale o Android Studio compatível com Android Gradle Plugin 9.4.0 e SDK 37.
-2. Abra esta pasta como projeto Gradle.
-3. Permita que o Android Studio sincronize as dependências. O projeto define Gradle 9.6.0 no `gradle/wrapper/gradle-wrapper.properties` (o *wrapper executável* não foi incluído).
-4. Execute em aparelho ou emulador Android 11+ (API 30+).
-5. Para gerar o APK de teste: **Build > Build App Bundle(s) / APK(s) > Build APK(s)**.
+## Compilação e testes
 
-O GitHub Actions compila o APK de teste automaticamente a cada push para `main`. Abra a aba **Actions**, selecione a execução **Build Android APK** e baixe o artefato **SmartClean-debug-APK** após o sucesso.
+1. Abra o repositório em Android Studio com SDK 37, Java 17 e suporte ao Android Gradle Plugin 9.4.0/Gradle 9.6.0.
+2. Rode `gradle :app:testDebugUnitTest :app:assembleDebug` ou use a workflow **Build Android APK** em GitHub Actions.
+3. O APK de depuração tem sufixo de pacote `.beta`, podendo coexistir com uma futura versão assinada da Play Store. Uma build *debug* não deve ser distribuída como produção.
+4. O artefato padrão de Actions é baixado em ZIP pela própria interface do GitHub. A workflow manual **Publicar APK aprovado** publica o `.apk` **direto** na página de Releases, após aprovação de testes e versão. Ela não roda a cada push.
 
-## Permissões e segurança
+Repositório: `juliano-souza-dev/smart-clean`. Nenhum APK deve ser publicado antes da validação do conjunto completo pelo responsável.
 
-O manifesto declara `MANAGE_EXTERNAL_STORAGE`. A permissão **não é concedida automaticamente**: o usuário deve ativá-la explicitamente nas configurações do sistema. Ela é necessária para o Mega Scan que percorre arquivos compartilhados, sem a limitação do seletor de pastas. A exclusão não acontece durante o scan e exige marcação e confirmação de cada arquivo.
+## Organização
 
-**Google Play:** essa permissão é restrita. Aplicativos cujo propósito central é gerenciamento/manutenção de arquivos podem solicitar avaliação, mas a Google Play exige declaração e aprovação, sem garantia de aceitação. Antes da publicação também são necessários política de privacidade, testes reais, assinatura de release e AAB.
-
-## Estrutura
-
-- `app/src/main/MainActivity.kt`: tela principal e fluxo de seleção/remoção.
-- `app/src/main/MegaScanner.kt`: busca automática, análise e SHA-256.
-- `app/src/main/AndroidManifest.xml`: permissão especial explícita.
-- `app/build.gradle.kts`: dependências e opções Android.
-
-O identificador do pacote ainda é provisório e pode ser alterado antes da publicação.
+| Arquivo | Responsabilidade |
+| --- | --- |
+| `SmartCleanActivity.kt` | Navegação inferior, revisões e ações explícitas |
+| `MegaScanner.kt`, `ScanPolicy.kt`, `FileDigests.kt` | Busca, limites, categorias, proteção e duplicatas |
+| `ScanService.kt` | Execução em foreground com notificação/cancelamento |
+| `TrashManager.kt` | Movimentação, restauração e exclusão da lixeira |
+| `DeviceDiagnostics.kt` | Leituras reais de saúde, bateria, RAM e uso |
+| `HistoryRepository.kt` | Histórico local e detalhado |
+| `app/src/test` | Testes de classificação, políticas, SHA-256 e snapshot |

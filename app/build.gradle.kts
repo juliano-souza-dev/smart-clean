@@ -16,6 +16,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".beta"
+            versionNameSuffix = "-beta"
+        }
         release {
             isMinifyEnabled = false
         }
