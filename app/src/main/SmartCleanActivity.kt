@@ -4,13 +4,11 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
-import android.util.Size
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +36,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -53,7 +55,7 @@ private enum class MainTab(val title: String, val icon: String) {
     HOME("Início", "⌂"), FILES("Arquivos", "▤"), HEALTH("Saúde", "♥"), TRASH("Lixeira", "▣")
 }
 
-private enum class FileCategory(val title: String, val kind: FileKind? = null) {
+internal enum class FileCategory(val title: String, val kind: FileKind? = null) {
     LARGE("Grandes"), DUPLICATES("Duplicados"), TEMPORARY("Temporários"),
     HIDDEN("Ocultos"), THUMBNAILS("Miniaturas"), APP_MEDIA("Mídias de apps"), OUTSIDE_INDEX("Fora da galeria"),
     PHOTOS("Fotos", FileKind.PHOTO), CAPTURES("Capturas", FileKind.SCREENSHOT),
@@ -62,21 +64,6 @@ private enum class FileCategory(val title: String, val kind: FileKind? = null) {
     PDF("PDFs", FileKind.PDF), DOCUMENT("Documentos", FileKind.DOCUMENT),
     ARCHIVES("Compactados", FileKind.ARCHIVE), APK("APKs", FileKind.APK),
     OTHER("Outros", FileKind.OTHER), ALL("Todos")
-}
-
-private fun categoryFiles(category: FileCategory, report: MegaReport?): List<MegaFile> {
-    if (report == null) return emptyList()
-    return when (category) {
-        FileCategory.LARGE -> report.largeFiles
-        FileCategory.DUPLICATES -> report.files.filter { it.path in report.duplicatePaths }
-        FileCategory.TEMPORARY -> report.temporaryCandidates
-        FileCategory.HIDDEN -> report.hiddenFiles
-        FileCategory.THUMBNAILS -> report.thumbnailFiles
-        FileCategory.APP_MEDIA -> report.appMediaFiles
-        FileCategory.OUTSIDE_INDEX -> report.mediaOutsideIndex
-        FileCategory.ALL -> report.files
-        else -> report.files.filter { it.kind == category.kind }
-    }
 }
 
 class SmartCleanActivity : ComponentActivity() {
@@ -115,9 +102,11 @@ class SmartCleanActivity : ComponentActivity() {
             var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
             var selectedTrash by remember { mutableStateOf<Set<String>>(emptySet()) }
             var usage by remember { mutableStateOf(scanner.usage()) }
-            var health by remember { mutableStateOf(diagnostics.read()) }
-            var trashItems by remember { mutableStateOf(trash.items()) }
-            var historyItems by remember { mutableStateOf(history.all()) }
+            var health by remember { mutableStateOf<DeviceHealth?>(null) }
+            var trashItems by remember { mutableStateOf<List<TrashItem>>(emptyList()) }
+            var historyItems by remember { mutableStateOf<List<HistoryEntry>>(emptyList()) }
+            var historyLoading by remember { mutableStateOf(false) }
+            var trashLoaded by remember { mutableStateOf(false) }
             var excluded by remember { mutableStateOf(settings.excludedFolders()) }
             var largeMb by remember { mutableIntStateOf(settings.largeFileMb) }
             var deep by remember { mutableStateOf(settings.deepHashing) }
@@ -128,18 +117,28 @@ class SmartCleanActivity : ComponentActivity() {
             var showHistory by remember { mutableStateOf(false) }
             var showSettings by remember { mutableStateOf(false) }
 
+            fun loadHistory() {
+                scope.launch {
+                    historyLoading = true
+                    try { historyItems = withContext(Dispatchers.IO) { history.all() } }
+                    finally { historyLoading = false }
+                }
+            }
+
             fun refresh() {
+                val includeHistory = showHistory
                 scope.launch {
                     withContext(Dispatchers.IO) {
                         val latestUsage = scanner.usage()
                         val latestHealth = diagnostics.read()
                         val latestTrash = trash.items()
-                        val latestHistory = history.all()
+                        val latestHistory = if (includeHistory) history.all() else null
                         withContext(Dispatchers.Main) {
                             usage = latestUsage
                             health = latestHealth
                             trashItems = latestTrash
-                            historyItems = latestHistory
+                            trashLoaded = true
+                            if (latestHistory != null) historyItems = latestHistory
                             excluded = settings.excludedFolders()
                         }
                     }
@@ -163,7 +162,8 @@ class SmartCleanActivity : ComponentActivity() {
             }
 
             fun openGuidance(name: String, action: String) {
-                guidance = name to health
+                val before = health ?: return
+                guidance = name to before
                 try { startActivity(Intent(action)) }
                 catch (_: Exception) {
                     guidance = null
@@ -222,6 +222,7 @@ class SmartCleanActivity : ComponentActivity() {
             LaunchedEffect(scan.finishedAt) {
                 if (scan.finishedAt != null) { selected = emptySet(); refresh() }
             }
+            LaunchedEffect(Unit) { refresh() }
 
             MaterialTheme(colorScheme = darkColorScheme(primary = Mint, onPrimary = Navy,
                 background = Navy, surface = Surface, onSurface = Color.White)) {
@@ -262,7 +263,9 @@ class SmartCleanActivity : ComponentActivity() {
                                 modifier = Modifier.padding(horizontal = 18.dp, vertical = 5.dp), fontSize = 12.sp)
                         }
                         when {
-                            showHistory -> HistoryScreen(historyItems, onClear = {
+                            showHistory -> if (historyLoading) {
+                                LoadingPanel("Carregando histórico…")
+                            } else HistoryScreen(historyItems, onClear = {
                                 history.clear(); refresh()
                             })
                             showSettings -> PreferencesScreen(largeMb, deep, excluded,
@@ -281,19 +284,49 @@ class SmartCleanActivity : ComponentActivity() {
                                         .setAction(ScanService.CANCEL))
                                 }, onFiles = { tab = MainTab.FILES }, onHistory = {
                                     showHistory = true; showSettings = false
+                                    loadHistory()
                                 })
                             tab == MainTab.FILES -> FilesScreen(scan.report, category, selected, busy || scan.running,
                                 onFilter = { category = it },
                                 onCheck = { path, checked ->
                                     selected = if (checked) selected + path else selected - path
                                 },
-                                onSelect = { selected = selected + it },
-                                onDeselect = { selected = selected - it },
+                                onSelect = { files ->
+                                    val previous = selected
+                                    scope.launch {
+                                        busy = true
+                                        try {
+                                            selected = withContext(Dispatchers.Default) {
+                                                previous + files.map { it.path }
+                                            }
+                                        } finally { busy = false }
+                                    }
+                                },
+                                onDeselect = { files ->
+                                    val previous = selected
+                                    scope.launch {
+                                        busy = true
+                                        try {
+                                            selected = withContext(Dispatchers.Default) {
+                                                previous - files.map { it.path }.toSet()
+                                            }
+                                        } finally { busy = false }
+                                    }
+                                },
                                 onDuplicates = {
-                                    val extras = scan.report?.duplicateGroups.orEmpty().flatMap { group ->
-                                        group.sortedBy { it.path }.drop(1)
-                                    }.mapTo(hashSetOf()) { it.path }
-                                    selected = selected + extras
+                                    val groups = scan.report?.duplicateGroups.orEmpty()
+                                    val previous = selected
+                                    scope.launch {
+                                        busy = true
+                                        try {
+                                            selected = withContext(Dispatchers.Default) {
+                                                val extras = groups.flatMap { group ->
+                                                    group.sortedBy { it.path }.drop(1)
+                                                }.mapTo(hashSetOf()) { it.path }
+                                                previous + extras
+                                            }
+                                        } finally { busy = false }
+                                    }
                                 },
                                 onProtect = { folder ->
                                     settings.protectFolder(folder)
@@ -303,12 +336,16 @@ class SmartCleanActivity : ComponentActivity() {
                                         "Pasta protegida. Uma nova análise aplicará a exclusão.", Toast.LENGTH_LONG).show()
                                 },
                                 onMove = { confirm = "mover" }, onDelete = { confirm = "excluir" })
-                            tab == MainTab.HEALTH -> HealthScreen(health, onRefresh = { refresh() },
+                            tab == MainTab.HEALTH -> if (health == null) {
+                                LoadingPanel("Lendo o estado do aparelho…")
+                            } else HealthScreen(health!!, onRefresh = { refresh() },
                                 onUsage = { openGuidance("Consulta de uso dos aplicativos", DeviceDiagnostics.USAGE_SETTINGS) },
                                 onPower = { openGuidance("Revisão de economia de bateria", Settings.ACTION_BATTERY_SAVER_SETTINGS) },
                                 onDisplay = { openGuidance("Ajuste de brilho", Settings.ACTION_DISPLAY_SETTINGS) },
                                 onApps = { openGuidance("Revisão dos aplicativos", Settings.ACTION_APPLICATION_SETTINGS) })
-                            else -> TrashScreen(trashItems, selectedTrash, busy,
+                            else -> if (!trashLoaded) {
+                                LoadingPanel("Carregando lixeira…")
+                            } else TrashScreen(trashItems, selectedTrash, busy,
                                 onCheck = { id, checked ->
                                     selectedTrash = if (checked) selectedTrash + id else selectedTrash - id
                                 }, onRestore = { confirm = "restaurar" },
@@ -354,6 +391,17 @@ private fun PanelCard(content: @Composable ColumnScope.() -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = Surface),
         shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    }
+}
+
+@Composable
+private fun LoadingPanel(message: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(color = Mint)
+            Spacer(Modifier.height(14.dp))
+            Text(message, color = Muted)
+        }
     }
 }
 
@@ -460,7 +508,7 @@ private fun SummaryMetric(title: String, value: String, modifier: Modifier = Mod
 private fun FilesScreen(
     report: MegaReport?, category: FileCategory, selected: Set<String>, busy: Boolean,
     onFilter: (FileCategory) -> Unit, onCheck: (String, Boolean) -> Unit,
-    onSelect: (Set<String>) -> Unit, onDeselect: (Set<String>) -> Unit,
+    onSelect: (List<MegaFile>) -> Unit, onDeselect: (List<MegaFile>) -> Unit,
     onDuplicates: () -> Unit, onProtect: (String) -> Unit,
     onMove: () -> Unit, onDelete: () -> Unit
 ) {
@@ -470,17 +518,38 @@ private fun FilesScreen(
         }
         return
     }
-    val candidates = remember(report, category) { categoryFiles(category, report) }
-    val paths = remember(candidates) { candidates.mapTo(hashSetOf()) { it.path } }
+    val catalog by produceState<FileResultsCatalog?>(initialValue = null, report) {
+        value = withContext(Dispatchers.Default) {
+            val job = currentCoroutineContext()[Job]
+            FileResultsCatalog.build(report) { job?.ensureActive() }
+        }
+    }
+    if (catalog == null) {
+        LoadingPanel("Organizando os resultados…")
+        return
+    }
+    val index = catalog!!
+    val slice = index[category]
+    var shownCount by remember(report, category) { mutableIntStateOf(80) }
+    val visible = remember(slice, shownCount) { slice.page(shownCount) }
+    val listState = remember(report, category) { LazyListState() }
+    LaunchedEffect(listState, slice) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .collect { lastIndex ->
+                if (lastIndex >= shownCount - 8 && shownCount < slice.count) {
+                    shownCount = (shownCount + 80).coerceAtMost(slice.count)
+                }
+            }
+    }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
             .padding(horizontal = 15.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             FileCategory.entries.forEach { item ->
                 FilterChip(selected = category == item, onClick = { onFilter(item) },
-                    label = { Text("${item.title} (${categoryFiles(item, report).size})") })
+                    label = { Text("${item.title} (${index[item].count})") })
             }
         }
-        Text("${candidates.size} arquivos · ${readableSize(candidates.sumOf { it.bytes })}",
+        Text("${slice.count} arquivos · ${readableSize(slice.totalBytes)}",
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp), color = Mint)
         if (category == FileCategory.OUTSIDE_INDEX) {
             Text(if (report.mediaIndexChecked) "Mídias possivelmente ausentes do índice da galeria; confira antes de excluir."
@@ -489,8 +558,8 @@ private fun FilesScreen(
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
             .padding(horizontal = 15.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(enabled = !busy, onClick = { onSelect(paths) }) { Text("Selecionar todos") }
-            TextButton(enabled = !busy, onClick = { onDeselect(paths) }) { Text("Desmarcar") }
+            TextButton(enabled = !busy, onClick = { onSelect(slice.files) }) { Text("Selecionar todos") }
+            TextButton(enabled = !busy, onClick = { onDeselect(slice.files) }) { Text("Desmarcar") }
             if (category == FileCategory.DUPLICATES) {
                 TextButton(enabled = !busy, onClick = onDuplicates) {
                     Text("Marcar extras mantendo uma cópia")
@@ -499,9 +568,9 @@ private fun FilesScreen(
         }
         Text("Nada vem pré-selecionado. Arquivos ocultos e temporários podem ser importantes.",
             modifier = Modifier.padding(horizontal = 18.dp), color = Muted, fontSize = 11.sp)
-        LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(13.dp),
+        LazyColumn(state = listState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(13.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            items(candidates, key = { it.path }) { file ->
+            items(visible, key = { it.path }) { file ->
                 val checked = file.path in selected
                 Row(Modifier.fillMaxWidth().border(1.dp,
                     if (checked) Mint else Color(0xFF344B62), RoundedCornerShape(12.dp))
@@ -521,6 +590,13 @@ private fun FilesScreen(
                             Text("Não tocar nesta pasta", fontSize = 11.sp)
                         }
                     }
+                }
+            }
+            if (shownCount < slice.count) item(key = "load-more") {
+                OutlinedButton(onClick = {
+                    shownCount = (shownCount + 80).coerceAtMost(slice.count)
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Mostrar mais · ${visible.size} de ${slice.count}")
                 }
             }
         }
@@ -543,15 +619,7 @@ private fun FilesScreen(
 @Composable
 private fun SmartPreview(file: MegaFile) {
     val image by produceState<Bitmap?>(initialValue = null, file.path, file.modified) {
-        value = if (ScanPolicy.isMedia(file.kind) && file.kind != FileKind.MUSIC &&
-            file.kind != FileKind.AUDIO) withContext(Dispatchers.IO) {
-            runCatching {
-                val source = File(file.path)
-                if (!source.isFile) null else if (file.kind == FileKind.PHOTO || file.kind == FileKind.SCREENSHOT)
-                    ThumbnailUtils.createImageThumbnail(source, Size(96, 96), null)
-                else ThumbnailUtils.createVideoThumbnail(source, Size(96, 96), null)
-            }.getOrNull()
-        } else null
+        value = ThumbnailRepository.load(file)
     }
     Box(Modifier.size(48.dp).clip(RoundedCornerShape(9.dp)).background(Color(0xFF293E53)),
         contentAlignment = Alignment.Center) {
@@ -694,6 +762,7 @@ private fun TrashScreen(
 @Composable
 private fun HistoryScreen(items: List<HistoryEntry>, onClear: () -> Unit) {
     var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val limits = remember { mutableStateMapOf<String, Int>() }
     var confirmClear by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -717,9 +786,17 @@ private fun HistoryScreen(items: List<HistoryEntry>, onClear: () -> Unit) {
                         expanded = if (item.id in expanded) expanded - item.id else expanded + item.id
                     }) { Text(if (item.id in expanded) "Ocultar arquivos" else "Mostrar arquivos envolvidos") }
                 }
-                if (item.id in expanded) item.outcomes.forEach { outcome ->
-                    Text("${if (outcome.success) "✓" else "!"} ${outcome.path} · " +
-                        "${readableSize(outcome.bytes)} · ${outcome.detail}", color = Muted, fontSize = 11.sp)
+                if (item.id in expanded) {
+                    val limit = limits[item.id] ?: 40
+                    item.outcomes.take(limit).forEach { outcome ->
+                        Text("${if (outcome.success) "✓" else "!"} ${outcome.path} · " +
+                            "${readableSize(outcome.bytes)} · ${outcome.detail}", color = Muted, fontSize = 11.sp)
+                    }
+                    if (limit < item.outcomes.size) {
+                        TextButton(onClick = { limits[item.id] = limit + 40 }) {
+                            Text("Mostrar mais arquivos ($limit/${item.outcomes.size})")
+                        }
+                    }
                 }
             }
         }
